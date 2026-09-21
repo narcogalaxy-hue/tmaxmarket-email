@@ -1,4 +1,5 @@
 const express = require("express");
+const cors = require("cors");
 const { garageRouter } = require("./garage");
 const { verifyShopifyWebhook } = require("./middleware/verifyShopify");
 const { sendEmail } = require("./email");
@@ -31,6 +32,7 @@ function getDelay(envKey, defaultMs) {
 
 function createApp() {
   const app = express();
+app.use(cors({ origin: "*" }));
 
   // Parse JSON while preserving rawBody for HMAC verification
   app.use(
