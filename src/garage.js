@@ -9,7 +9,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 const SHOPIFY_GRAPHQL_URL = "https://tmaxmarket-it.myshopify.com/admin/api/2026-07/graphql.json";
 
 function getAccessToken() {
-  return process.env.SHOPIFY_API_SECRET;
+  return process.env.SHOPIFY_ACCESS_TOKEN || process.env.SHOPIFY_API_SECRET;
 }
 
 async function shopifyGraphQL(query, variables = {}) {
