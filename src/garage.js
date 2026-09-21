@@ -148,7 +148,7 @@ async function upsertGarageMetaobject({ handle, customerId, anno, cilindrata, mo
   `;
 
   const fields = [
-    { key: "cliente", value: customerId },
+    { key: "cliente", value: `gid://shopify/Customer/${customerId}` },
     { key: "anno", value: anno },
     { key: "cilindrata", value: cilindrata },
     { key: "modello", value: modello },
