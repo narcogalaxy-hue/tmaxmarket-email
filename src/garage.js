@@ -27,6 +27,7 @@ async function shopifyGraphQL(query, variables = {}) {
   });
   const json = await res.json();
   if (json.errors) {
+    if (!Array.isArray(json.errors)) throw new Error(`Shopify error: ${JSON.stringify(json.errors)}`);
     const msg = json.errors.map((e) => e.message).join("; ");
     throw new Error(`Shopify GraphQL error: ${msg}`);
   }
