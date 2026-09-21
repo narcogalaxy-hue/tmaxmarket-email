@@ -1,4 +1,5 @@
 const express = require("express");
+const { garageRouter } = require("./garage");
 const { verifyShopifyWebhook } = require("./middleware/verifyShopify");
 const { sendEmail } = require("./email");
 const { welcomeEmail } = require("./templates/welcome");
@@ -500,6 +501,9 @@ function createApp() {
       res.status(500).json({ error: "Failed to send weekly report" });
     }
   });
+
+  // Garage module
+  app.use("/garage", garageRouter);
 
   return app;
 }
