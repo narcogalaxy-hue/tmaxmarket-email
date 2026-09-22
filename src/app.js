@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const { garageRouter } = require("./garage");
+const { raduniRouter } = require("./raduni");
 const { handleOrderPaid } = require("./ordersWebhook");
 const { verifyShopifyWebhook } = require("./middleware/verifyShopify");
 const { sendEmail } = require("./email");
@@ -534,6 +535,9 @@ app.use(cors({ origin: "*" }));
 
   // Garage module
   app.use("/garage", garageRouter);
+
+  // Raduni & Eventi module
+  app.use("/raduni", raduniRouter);
 
   return app;
 }
