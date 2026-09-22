@@ -131,7 +131,7 @@ async function createShopifyFile(resourceUrl, filename) {
 }
 
 // Step 4: Upsert metaobject
-async function upsertGarageMetaobject({ handle, customerId, anno, cilindrata, modello, modifiche, fotoFileId, acquisti }) {
+async function upsertGarageMetaobject({ handle, customerId, anno, cilindrata, modello, allestimento, modifiche, fotoFileId, acquisti }) {
   const query = `
     mutation metaobjectUpsert($handle: MetaobjectHandleInput!, $metaobject: MetaobjectUpsertInput!) {
       metaobjectUpsert(handle: $handle, metaobject: $metaobject) {
@@ -152,6 +152,7 @@ async function upsertGarageMetaobject({ handle, customerId, anno, cilindrata, mo
     { key: "anno", value: anno },
     { key: "cilindrata", value: cilindrata },
     { key: "modello", value: modello },
+    { key: "allestimento", value: allestimento },
     { key: "modifiche", value: modifiche },
   ];
 
@@ -262,7 +263,7 @@ function parseAcquisti(value) {
 // ──────────────────────────────────────
 router.post("/save", upload.single("foto"), async (req, res) => {
   try {
-    const { customer_id, anno, cilindrata, modello, modifiche } = req.body;
+    const { customer_id, anno, cilindrata, modello, allestimento, modifiche } = req.body;
 
     if (!customer_id) {
       return res.status(400).json({ error: "customer_id is required" });
@@ -295,6 +296,7 @@ router.post("/save", upload.single("foto"), async (req, res) => {
       anno: anno || "",
       cilindrata: cilindrata || "",
       modello: modello || "",
+      allestimento: allestimento || "",
       modifiche: modifiche || "",
       fotoFileId,
     });

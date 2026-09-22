@@ -85,6 +85,7 @@ describe("POST /garage/save", () => {
       .field("anno", "2022")
       .field("cilindrata", "530")
       .field("modello", "T-Max 530")
+      .field("allestimento", "Tech Max")
       .field("modifiche", "Marmitta Akrapovic");
 
     expect(res.status).toBe(200);
@@ -107,6 +108,7 @@ describe("POST /garage/save", () => {
         { key: "anno", value: "2022" },
         { key: "cilindrata", value: "530" },
         { key: "modello", value: "T-Max 530" },
+        { key: "allestimento", value: "Tech Max" },
         { key: "modifiche", value: "Marmitta Akrapovic" },
       ])
     );
@@ -255,6 +257,7 @@ describe("POST /garage/save", () => {
         { key: "anno", value: "" },
         { key: "cilindrata", value: "" },
         { key: "modello", value: "" },
+        { key: "allestimento", value: "" },
         { key: "modifiche", value: "" },
       ])
     );
@@ -353,6 +356,32 @@ describe("GET /garage/:customer_id", () => {
       type: "veicolo_garage",
       handle: "garage-ABC123",
     });
+  });
+
+  it("returns allestimento field in garage data", async () => {
+    mockGraphQLResponses([
+      {
+        data: {
+          metaobjectByHandle: {
+            id: "gid://shopify/Metaobject/12345",
+            handle: "garage-67890",
+            fields: [
+              { key: "anno", value: "2023", reference: null },
+              { key: "cilindrata", value: "560", reference: null },
+              { key: "modello", value: "T-Max 560", reference: null },
+              { key: "allestimento", value: "Iron Max", reference: null },
+              { key: "modifiche", value: "", reference: null },
+            ],
+          },
+        },
+      },
+    ]);
+
+    const res = await request(app).get("/garage/67890");
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.garage.allestimento).toBe("Iron Max");
   });
 });
 
