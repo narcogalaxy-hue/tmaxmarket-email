@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const { garageRouter } = require("./garage");
+const { handleOrderPaid } = require("./ordersWebhook");
 const { verifyShopifyWebhook } = require("./middleware/verifyShopify");
 const { sendEmail } = require("./email");
 const { welcomeEmail } = require("./templates/welcome");
@@ -503,6 +504,33 @@ app.use(cors({ origin: "*" }));
       res.status(500).json({ error: "Failed to send weekly report" });
     }
   });
+
+  // ──────────────────────────────────────────────────────
+  // Webhook: orders/paid (garage acquisti tracking)
+  // ──────────────────────────────────────────────────────
+  app.post(
+    "/webhooks/orders/paid",
+    verifyShopifyWebhook,
+    async (req, res) => {
+      try {
+        const order = req.body;
+        const result = await handleOrderPaid(order);
+
+        if (result.skipped) {
+          console.log(`Order paid webhook skipped: ${result.reason}`);
+          return res.status(200).json({ success: true, skipped: true, reason: result.reason });
+        }
+
+        console.log(
+          `Order paid: ${result.action} garage for customer, ${result.items_added} items added (total: ${result.total_items})`
+        );
+        res.status(200).json({ success: true, ...result });
+      } catch (err) {
+        console.error("Error processing order paid webhook:", err);
+        res.status(500).json({ error: "Failed to process order paid webhook", details: err.message });
+      }
+    }
+  );
 
   // Garage module
   app.use("/garage", garageRouter);

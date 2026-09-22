@@ -3,6 +3,7 @@ const path = require("path");
 
 // Set env vars before requiring modules
 process.env.SHOPIFY_API_SECRET = "test_shopify_secret";
+process.env.SHOPIFY_ACCESS_TOKEN = "test_shopify_secret";
 process.env.SHOPIFY_API_KEY = "test_shopify_key";
 process.env.SHOPIFY_WEBHOOK_SECRET = "test_webhook_secret_123";
 process.env.RESEND_API_KEY = "re_test_fake_key";
@@ -102,7 +103,7 @@ describe("POST /garage/save", () => {
     expect(body.variables.handle.type).toBe("veicolo_garage");
     expect(body.variables.metaobject.fields).toEqual(
       expect.arrayContaining([
-        { key: "cliente", value: "67890" },
+        { key: "cliente", value: "gid://shopify/Customer/67890" },
         { key: "anno", value: "2022" },
         { key: "cilindrata", value: "530" },
         { key: "modello", value: "T-Max 530" },

@@ -131,7 +131,7 @@ async function createShopifyFile(resourceUrl, filename) {
 }
 
 // Step 4: Upsert metaobject
-async function upsertGarageMetaobject({ handle, customerId, anno, cilindrata, modello, modifiche, fotoFileId }) {
+async function upsertGarageMetaobject({ handle, customerId, anno, cilindrata, modello, modifiche, fotoFileId, acquisti }) {
   const query = `
     mutation metaobjectUpsert($handle: MetaobjectHandleInput!, $metaobject: MetaobjectUpsertInput!) {
       metaobjectUpsert(handle: $handle, metaobject: $metaobject) {
@@ -159,6 +159,10 @@ async function upsertGarageMetaobject({ handle, customerId, anno, cilindrata, mo
     fields.push({ key: "foto", value: fotoFileId });
   }
 
+  if (acquisti !== undefined) {
+    fields.push({ key: "acquisti", value: typeof acquisti === "string" ? acquisti : JSON.stringify(acquisti) });
+  }
+
   const variables = {
     handle: {
       type: "veicolo_garage",
@@ -173,6 +177,38 @@ async function upsertGarageMetaobject({ handle, customerId, anno, cilindrata, mo
   const result = data.metaobjectUpsert;
   if (result.userErrors && result.userErrors.length > 0) {
     throw new Error(`Metaobject upsert error: ${result.userErrors.map((e) => e.message).join("; ")}`);
+  }
+  return result.metaobject;
+}
+
+// Update only the acquisti field on an existing metaobject
+async function updateAcquistiField(metaobjectId, acquistiJson) {
+  const query = `
+    mutation metaobjectUpdate($id: ID!, $metaobject: MetaobjectUpdateInput!) {
+      metaobjectUpdate(id: $id, metaobject: $metaobject) {
+        metaobject {
+          id
+          handle
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+  const variables = {
+    id: metaobjectId,
+    metaobject: {
+      fields: [
+        { key: "acquisti", value: typeof acquistiJson === "string" ? acquistiJson : JSON.stringify(acquistiJson) },
+      ],
+    },
+  };
+  const data = await shopifyGraphQL(query, variables);
+  const result = data.metaobjectUpdate;
+  if (result.userErrors && result.userErrors.length > 0) {
+    throw new Error(`Metaobject update error: ${result.userErrors.map((e) => e.message).join("; ")}`);
   }
   return result.metaobject;
 }
@@ -208,6 +244,17 @@ async function getGarageMetaobject(handle) {
 
   const data = await shopifyGraphQL(query, variables);
   return data.metaobjectByHandle;
+}
+
+// Parse acquisti JSON safely
+function parseAcquisti(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 // ──────────────────────────────────────
@@ -286,7 +333,16 @@ router.get("/:customer_id", async (req, res) => {
       if (field.key === "foto" && field.reference?.image?.url) {
         garage.foto_url = field.reference.image.url;
       }
-      garage[field.key] = field.value;
+      if (field.key === "acquisti") {
+        garage.acquisti = parseAcquisti(field.value);
+      } else {
+        garage[field.key] = field.value;
+      }
+    }
+
+    // Ensure acquisti is always present
+    if (!garage.acquisti) {
+      garage.acquisti = [];
     }
 
     res.status(200).json({ success: true, garage });
@@ -305,6 +361,8 @@ module.exports = {
     uploadToStagedTarget,
     createShopifyFile,
     upsertGarageMetaobject,
+    updateAcquistiField,
     getGarageMetaobject,
+    parseAcquisti,
   },
 };

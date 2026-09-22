@@ -5,11 +5,12 @@ Sistema di automazione email per [TmaxMarket.it](https://tmaxmarket.it), il mark
 ## 🚀 Features
 
 ### Webhook Endpoints (Shopify)
-| Endpoint | Trigger | Email |
+| Endpoint | Trigger | Azione |
 |---|---|---|
 | `POST /webhooks/customers/create` | Nuovo cliente | Email di benvenuto |
 | `POST /webhooks/orders/create` | Nuovo ordine | Conferma ordine |
 | `POST /webhooks/orders/fulfilled` | Ordine spedito | Notifica spedizione + tracking |
+| `POST /webhooks/orders/paid` | Ordine pagato | Aggiorna storico acquisti nel Garage |
 | `POST /webhooks/checkouts/create` | Checkout iniziato | Carrello abbandonato (1h dopo) |
 
 ### Custom Endpoints
@@ -21,6 +22,12 @@ Sistema di automazione email per [TmaxMarket.it](https://tmaxmarket.it), il mark
 | `POST /reports/trigger-weekly` | Report settimanale venditori |
 | `GET /health` | Health check |
 
+### Garage Endpoints
+| Endpoint | Descrizione |
+|---|---|
+| `POST /garage/save` | Salva/aggiorna il veicolo nel garage (con foto opzionale) |
+| `GET /garage/:customer_id` | Recupera dati garage + storico acquisti |
+
 ### Scheduled Emails
 - **Review Request**: 5 giorni dopo la spedizione, richiesta di recensione
 - **Abandoned Cart**: 1 ora dopo il checkout, se l'ordine non è stato completato
@@ -29,6 +36,42 @@ Sistema di automazione email per [TmaxMarket.it](https://tmaxmarket.it), il mark
   - 24h: Consigli per annunci perfetti
   - 72h: Gestione ordini e pagamenti
 - **Weekly Seller Report**: Ogni lunedì alle 9:00 (Europe/Rome) via cron
+
+## ⚠️ Shopify Admin Setup Required
+
+### Metaobject: `acquisti` field
+Il metaobject `veicolo_garage` necessita di un campo `acquisti` per lo storico acquisti.
+
+**Come aggiungerlo:**
+1. Vai su Shopify Admin → **Content** → **Metaobject definitions**
+2. Apri **Veicolo Garage** (`veicolo_garage`)
+3. Clicca **Add field**
+4. Nome: `acquisti`
+5. Tipo: **Multi-line text**
+6. Salva
+
+Questo campo memorizza un array JSON di acquisti:
+```json
+[
+  {
+    "product": "Marmitta Akrapovic",
+    "date": "2026-09-22",
+    "order_id": "1234",
+    "price": "299.00"
+  }
+]
+```
+
+### Shopify Webhooks da registrare
+In Shopify Admin → Settings → Notifications → Webhooks, registra:
+
+| Evento | URL |
+|---|---|
+| Customer creation | `https://YOUR-APP-URL/webhooks/customers/create` |
+| Order creation | `https://YOUR-APP-URL/webhooks/orders/create` |
+| Order payment | `https://YOUR-APP-URL/webhooks/orders/paid` |
+| Order fulfillment | `https://YOUR-APP-URL/webhooks/orders/fulfilled` |
+| Checkout creation | `https://YOUR-APP-URL/webhooks/checkouts/create` |
 
 ## 📦 Setup
 
@@ -41,6 +84,7 @@ npm install
 ```bash
 RESEND_API_KEY=re_your_key_here
 SHOPIFY_WEBHOOK_SECRET=your_shopify_webhook_secret
+SHOPIFY_ACCESS_TOKEN=your_shopify_access_token
 PORT=3000
 
 # Optional: override delays for testing (milliseconds)
@@ -48,6 +92,10 @@ REVIEW_DELAY_MS=432000000       # 5 days (default)
 CART_ABANDON_DELAY_MS=3600000   # 1 hour (default)
 VENDOR_EMAIL2_DELAY_MS=86400000 # 24 hours (default)
 VENDOR_EMAIL3_DELAY_MS=259200000 # 72 hours (default)
+
+# Legacy / alternative names
+SHOPIFY_API_KEY=your_shopify_api_key
+SHOPIFY_API_SECRET=your_shopify_access_token
 ```
 
 ### Run
@@ -63,6 +111,7 @@ docker build -t tmaxmarket-email .
 docker run -p 3000:3000 \
   -e RESEND_API_KEY=re_xxx \
   -e SHOPIFY_WEBHOOK_SECRET=xxx \
+  -e SHOPIFY_ACCESS_TOKEN=xxx \
   tmaxmarket-email
 ```
 
@@ -83,6 +132,17 @@ Shopify webhook — sends welcome email to new customers.
 Shopify webhook — sends order confirmation email.
 - **Headers**: `X-Shopify-Hmac-Sha256`
 - **Body**: Shopify order object (`{ order_number, email, line_items, total_price, ... }`)
+
+### `POST /webhooks/orders/paid`
+Shopify webhook — tracks purchases in the customer's Garage.
+- **Headers**: `X-Shopify-Hmac-Sha256`
+- **Body**: Shopify order object (`{ id, customer: { id }, line_items: [{ title, price }], created_at, ... }`)
+- **Behavior**:
+  - Extracts customer ID, line items (product + price), order date
+  - Finds the customer's `veicolo_garage` metaobject (`garage-{customer_id}`)
+  - Reads existing `acquisti` JSON array, appends new purchases, saves back
+  - If no garage exists yet, creates one with just the `acquisti` field
+  - Gracefully skips if no customer ID or no line items
 
 ### `POST /webhooks/orders/fulfilled`
 Shopify webhook — sends shipping notification + schedules review request (5 days).
@@ -125,15 +185,36 @@ Manually trigger weekly vendor report.
   "periodEnd": "20 Set 2026"
 }
 ```
-- **Body** (multiple vendors):
+
+### `GET /garage/:customer_id`
+Fetch customer's garage data including purchase history.
+- **Response**:
 ```json
 {
-  "vendors": [
-    { "email": "v1@example.com", "vendorName": "Shop A", "totalOrders": 5, "totalRevenue": 300 },
-    { "email": "v2@example.com", "vendorName": "Shop B", "totalOrders": 8, "totalRevenue": 600 }
-  ]
+  "success": true,
+  "garage": {
+    "id": "gid://shopify/Metaobject/12345",
+    "handle": "garage-67890",
+    "anno": "2022",
+    "cilindrata": "530",
+    "modello": "T-Max 530",
+    "modifiche": "Marmitta Akrapovic",
+    "foto_url": "https://cdn.shopify.com/...",
+    "acquisti": [
+      {
+        "product": "Marmitta Akrapovic",
+        "date": "2026-09-22",
+        "order_id": "1234",
+        "price": "299.00"
+      }
+    ]
+  }
 }
 ```
+
+### `POST /garage/save`
+Save/update garage data (multipart form with optional photo).
+- **Body**: `customer_id`, `anno`, `cilindrata`, `modello`, `modifiche`, `foto` (file)
 
 ## 🎨 Branding
 - **Primary color**: `#FF6B00` (arancione)
@@ -149,6 +230,8 @@ Manually trigger weekly vendor report.
 │   ├── app.js                    # Express app with all routes
 │   ├── index.js                  # Server startup + cron jobs
 │   ├── email.js                  # Resend email sending
+│   ├── garage.js                 # Garage CRUD (metaobject + file upload)
+│   ├── ordersWebhook.js          # Orders/paid webhook → garage acquisti
 │   ├── scheduler.js              # In-memory setTimeout scheduler
 │   ├── dataStore.js              # JSON file data persistence
 │   ├── middleware/
@@ -165,6 +248,8 @@ Manually trigger weekly vendor report.
 │       └── weeklyReport.js       # Weekly seller report
 ├── __tests__/
 │   ├── app.test.js               # Tests for original endpoints
+│   ├── garage.test.js            # Tests for garage CRUD
+│   ├── orders-webhook.test.js    # Tests for orders/paid webhook
 │   └── v2-features.test.js       # Tests for new features
 ├── data/                         # JSON file storage (gitignored)
 │   └── .gitkeep
@@ -178,5 +263,6 @@ Manually trigger weekly vendor report.
 - **Framework**: Express.js
 - **Email**: Resend API
 - **Scheduling**: node-cron (weekly) + setTimeout (delayed emails)
-- **Storage**: JSON files in `/data/`
+- **Storage**: JSON files in `/data/`; Shopify metaobjects for garage data
 - **Webhooks**: Shopify HMAC-SHA256 verification
+- **Shopify API**: Admin GraphQL API (2026-07) for metaobject CRUD
