@@ -70,7 +70,7 @@ async function createRadunoArticle({ titolo, gruppo, dataEvento, luogo, link, de
   const query = `
     mutation articleCreate($article: ArticleCreateInput!) {
       articleCreate(article: $article) {
-        article { id handle onlineStoreUrl }
+        article { id handle }
         userErrors { field message }
       }
     }`;
@@ -115,7 +115,7 @@ router.post("/pubblica", async (req, res) => {
 
     const authorName = [customer.firstName, customer.lastName].filter(Boolean).join(" ") || gruppo;
     const article = await createRadunoArticle({ titolo, gruppo, dataEvento, luogo, link, descrizione, authorName });
-    const articleUrl = article.onlineStoreUrl || `https://tmaxmarket.it/blogs/raduni-eventi/${article.handle}`;
+    const articleUrl = `https://tmaxmarket.it/blogs/raduni-eventi/${article.handle}`;
 
     const notificaHtml = radunoNotificaEmail({ titolo, gruppo, dataEvento, luogo, link, descrizione, authorName, articleUrl });
     await sendEmail({ to: "pablostmaxshop@gmail.com", subject: `Nuovo raduno pubblicato: ${titolo} 📍`, html: notificaHtml });
