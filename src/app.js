@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const fetch = require("node-fetch");
 const { garageRouter } = require("./garage");
 const { raduniRouter } = require("./raduni");
 const { handleOrderPaid } = require("./ordersWebhook");
@@ -27,16 +28,14 @@ const {
   trackOrder,
 } = require("./dataStore");
 
-// Delay getters (read env at call time so tests can override)
 function getDelay(envKey, defaultMs) {
   return process.env[envKey] ? Number(process.env[envKey]) : defaultMs;
 }
 
 function createApp() {
   const app = express();
-app.use(cors({ origin: "*" }));
+  app.use(cors({ origin: "*" }));
 
-  // Parse JSON while preserving rawBody for HMAC verification
   app.use(
     express.json({
       verify: (req, _res, buf) => {
@@ -45,14 +44,27 @@ app.use(cors({ origin: "*" }));
     })
   );
 
-  // Health check
   app.get("/health", (_req, res) => {
     res.status(200).json({ status: "ok" });
   });
 
-  // ──────────────────────────────────────────
-  // Webhook: customers/create (welcome email)
-  // ──────────────────────────────────────────
+  // Temporary OAuth callback
+  app.get("/oauth/callback", async (req, res) => {
+    const { code, shop } = req.query;
+    if (!code) return res.send("Nessun codice ricevuto");
+    const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: "97a8a722e984d81e11888ac13a87dbad",
+        client_secret: process.env.SHOPIFY_CLIENT_SECRET,
+        code,
+      }),
+    });
+    const data = await response.json();
+    res.send(`TOKEN: ${JSON.stringify(data)}`);
+  });
+
   app.post(
     "/webhooks/customers/create",
     verifyShopifyWebhook,
@@ -60,19 +72,9 @@ app.use(cors({ origin: "*" }));
       try {
         const customer = req.body;
         const email = customer.email;
-
-        if (!email) {
-          return res.status(400).json({ error: "Customer email is required" });
-        }
-
+        if (!email) return res.status(400).json({ error: "Customer email is required" });
         const html = welcomeEmail({ firstName: customer.first_name });
-
-        const result = await sendEmail({
-          to: email,
-          subject: "Benvenuto su TmaxMarket.it! 🛵",
-          html,
-        });
-
+        const result = await sendEmail({ to: email, subject: "Benvenuto su TmaxMarket.it! 🛵", html });
         console.log(`Welcome email sent to ${email}`, result);
         res.status(200).json({ success: true, emailId: result.data?.id });
       } catch (err) {
@@ -82,9 +84,6 @@ app.use(cors({ origin: "*" }));
     }
   );
 
-  // ──────────────────────────────────────────
-  // Webhook: orders/create (order confirmation)
-  // ──────────────────────────────────────────
   app.post(
     "/webhooks/orders/create",
     verifyShopifyWebhook,
@@ -92,50 +91,36 @@ app.use(cors({ origin: "*" }));
       try {
         const order = req.body;
         const email = order.email || order.contact_email;
-
-        if (!email) {
-          return res.status(400).json({ error: "Order email is required" });
-        }
-
-        // Track order to detect completed checkouts
+        if (!email) return res.status(400).json({ error: "Order email is required" });
         if (order.checkout_token || order.checkout_id) {
           trackOrder(order.id || order.order_number, order.checkout_token || order.checkout_id);
         }
-
         const lineItems = (order.line_items || []).map((item) => ({
           name: item.title || item.name,
           variant_title: item.variant_title,
           quantity: item.quantity,
           price: item.price,
         }));
-
         const html = orderConfirmationEmail({
           orderNumber: order.order_number || order.name,
           lineItems,
           totalPrice: order.total_price,
           orderStatusUrl: order.order_status_url,
         });
-
         const result = await sendEmail({
           to: email,
           subject: `Ordine confermato #${order.order_number || order.name} - TmaxMarket.it`,
           html,
         });
-
         console.log(`Order confirmation email sent to ${email}`, result);
         res.status(200).json({ success: true, emailId: result.data?.id });
       } catch (err) {
         console.error("Error sending order confirmation email:", err);
-        res
-          .status(500)
-          .json({ error: "Failed to send order confirmation email" });
+        res.status(500).json({ error: "Failed to send order confirmation email" });
       }
     }
   );
 
-  // ──────────────────────────────────────────────────────
-  // Webhook: orders/fulfilled (shipping + review schedule)
-  // ──────────────────────────────────────────────────────
   app.post(
     "/webhooks/orders/fulfilled",
     verifyShopifyWebhook,
@@ -143,82 +128,36 @@ app.use(cors({ origin: "*" }));
       try {
         const order = req.body;
         const email = order.email || order.contact_email;
-
-        if (!email) {
-          return res.status(400).json({ error: "Order email is required" });
-        }
-
+        if (!email) return res.status(400).json({ error: "Order email is required" });
         const orderNumber = order.order_number || order.name;
-
-        // Extract tracking info from fulfillments
-        const fulfillment =
-          (order.fulfillments && order.fulfillments[0]) || {};
-        const trackingNumber =
-          fulfillment.tracking_number || order.tracking_number || null;
-        const trackingUrl =
-          fulfillment.tracking_url || order.tracking_url || null;
-        const carrier =
-          fulfillment.tracking_company || order.tracking_company || null;
-        const estimatedDelivery =
-          fulfillment.estimated_delivery_at || order.estimated_delivery_at || null;
-
-        // 1. Send fulfillment/shipping email
-        const html = fulfillmentEmail({
-          orderNumber,
-          trackingNumber,
-          trackingUrl,
-          carrier,
-          estimatedDelivery,
-        });
-
-        const result = await sendEmail({
-          to: email,
-          subject: "Il tuo ordine è in arrivo! 🚚 - TmaxMarket.it",
-          html,
-        });
-
-        // 2. Schedule review request email (5 days later)
+        const fulfillment = (order.fulfillments && order.fulfillments[0]) || {};
+        const trackingNumber = fulfillment.tracking_number || order.tracking_number || null;
+        const trackingUrl = fulfillment.tracking_url || order.tracking_url || null;
+        const carrier = fulfillment.tracking_company || order.tracking_company || null;
+        const estimatedDelivery = fulfillment.estimated_delivery_at || order.estimated_delivery_at || null;
+        const html = fulfillmentEmail({ orderNumber, trackingNumber, trackingUrl, carrier, estimatedDelivery });
+        const result = await sendEmail({ to: email, subject: "Il tuo ordine è in arrivo! 🚚 - TmaxMarket.it", html });
         const reviewDelayMs = getDelay("REVIEW_DELAY_MS", 5 * 24 * 60 * 60 * 1000);
-        const customerName =
-          order.customer?.first_name ||
-          order.shipping_address?.first_name ||
-          null;
+        const customerName = order.customer?.first_name || order.shipping_address?.first_name || null;
         const reviewId = `review-${orderNumber}-${email}`;
         scheduleEmail(reviewId, reviewDelayMs, async () => {
           const reviewHtml = reviewRequestEmail({
             orderNumber,
             customerName,
-            orderStatusUrl:
-              order.order_status_url ||
-              "https://tmaxmarket.it/account/orders",
+            orderStatusUrl: order.order_status_url || "https://tmaxmarket.it/account/orders",
           });
-          await sendEmail({
-            to: email,
-            subject:
-              "Come è andata? Lascia una recensione 🌟 - TmaxMarket.it",
-            html: reviewHtml,
-          });
+          await sendEmail({ to: email, subject: "Come è andata? Lascia una recensione 🌟 - TmaxMarket.it", html: reviewHtml });
           console.log(`Review request sent to ${email} for order #${orderNumber}`);
         });
-
         console.log(`Fulfillment email sent to ${email}`, result);
-        res.status(200).json({
-          success: true,
-          emailId: result.data?.id,
-          reviewScheduled: true,
-        });
+        res.status(200).json({ success: true, emailId: result.data?.id, reviewScheduled: true });
       } catch (err) {
         console.error("Error sending fulfillment email:", err);
-        res
-          .status(500)
-          .json({ error: "Failed to send fulfillment email" });
+        res.status(500).json({ error: "Failed to send fulfillment email" });
       }
     }
   );
 
-  // ──────────────────────────────────────────
-  // Webhook: checkouts/create (abandoned cart)
-  // ──────────────────────────────────────────
   app.post(
     "/webhooks/checkouts/create",
     verifyShopifyWebhook,
@@ -227,78 +166,36 @@ app.use(cors({ origin: "*" }));
         const checkout = req.body;
         const email = checkout.email || checkout.customer?.email;
         const checkoutToken = checkout.token || checkout.id;
-
-        if (!email || !checkoutToken) {
-          return res.status(400).json({
-            error: "Checkout email and token are required",
-          });
-        }
-
-        // Store checkout data
+        if (!email || !checkoutToken) return res.status(400).json({ error: "Checkout email and token are required" });
         trackCheckout(checkoutToken, {
           email,
-          customerName:
-            checkout.customer?.first_name ||
-            checkout.billing_address?.first_name ||
-            null,
-          checkoutUrl:
-            checkout.abandoned_checkout_url ||
-            checkout.webUrl ||
-            `https://tmaxmarket.it/checkouts/${checkoutToken}`,
-          lineItems: (checkout.line_items || []).map((item) => ({
-            title: item.title || item.name,
-            quantity: item.quantity,
-            price: item.price,
-          })),
+          customerName: checkout.customer?.first_name || checkout.billing_address?.first_name || null,
+          checkoutUrl: checkout.abandoned_checkout_url || checkout.webUrl || `https://tmaxmarket.it/checkouts/${checkoutToken}`,
+          lineItems: (checkout.line_items || []).map((item) => ({ title: item.title || item.name, quantity: item.quantity, price: item.price })),
           totalPrice: checkout.total_price,
         });
-
-        // Schedule abandoned cart email (1 hour later)
         const cartDelayMs = getDelay("CART_ABANDON_DELAY_MS", 60 * 60 * 1000);
         const cartId = `cart-${checkoutToken}`;
         scheduleEmail(cartId, cartDelayMs, async () => {
-          // Check if an order was placed for this checkout
           if (hasOrderForCheckout(checkoutToken)) {
-            console.log(
-              `Checkout ${checkoutToken} completed, skipping abandoned cart email`
-            );
+            console.log(`Checkout ${checkoutToken} completed, skipping abandoned cart email`);
             removeCheckout(checkoutToken);
             return;
           }
-
           const checkoutData = {
             email,
-            customerName:
-              checkout.customer?.first_name ||
-              checkout.billing_address?.first_name ||
-              null,
-            checkoutUrl:
-              checkout.abandoned_checkout_url ||
-              checkout.webUrl ||
-              `https://tmaxmarket.it/checkouts/${checkoutToken}`,
-            lineItems: (checkout.line_items || []).map((item) => ({
-              title: item.title || item.name,
-              quantity: item.quantity,
-              price: item.price,
-            })),
+            customerName: checkout.customer?.first_name || checkout.billing_address?.first_name || null,
+            checkoutUrl: checkout.abandoned_checkout_url || checkout.webUrl || `https://tmaxmarket.it/checkouts/${checkoutToken}`,
+            lineItems: (checkout.line_items || []).map((item) => ({ title: item.title || item.name, quantity: item.quantity, price: item.price })),
             totalPrice: checkout.total_price,
           };
-
           const html = abandonedCartEmail(checkoutData);
-          await sendEmail({
-            to: email,
-            subject: "Hai dimenticato qualcosa? 🛒 - TmaxMarket.it",
-            html,
-          });
+          await sendEmail({ to: email, subject: "Hai dimenticato qualcosa? 🛒 - TmaxMarket.it", html });
           console.log(`Abandoned cart email sent to ${email}`);
           removeCheckout(checkoutToken);
         });
-
         console.log(`Checkout ${checkoutToken} tracked for ${email}`);
-        res.status(200).json({
-          success: true,
-          message: "Checkout tracked, reminder scheduled",
-        });
+        res.status(200).json({ success: true, message: "Checkout tracked, reminder scheduled" });
       } catch (err) {
         console.error("Error processing checkout:", err);
         res.status(500).json({ error: "Failed to process checkout" });
@@ -306,172 +203,75 @@ app.use(cors({ origin: "*" }));
     }
   );
 
-  // ──────────────────────────────────────────────────
-  // Webhook: vendors/create (vendor onboarding drip)
-  // ──────────────────────────────────────────────────
   app.post("/webhooks/vendors/create", async (req, res) => {
     try {
       const vendor = req.body;
       const email = vendor.email;
-
-      if (!email) {
-        return res.status(400).json({ error: "Vendor email is required" });
-      }
-
+      if (!email) return res.status(400).json({ error: "Vendor email is required" });
       const vendorName = vendor.name || vendor.first_name || null;
-
-      // Email 1: Immediate welcome
       const welcomeHtml = vendorWelcomeEmail({ vendorName });
-      const result = await sendEmail({
-        to: email,
-        subject: "Benvenuto tra i venditori di TmaxMarket.it! 🏪",
-        html: welcomeHtml,
-      });
-
-      // Email 2: 24h later - listing tips
+      const result = await sendEmail({ to: email, subject: "Benvenuto tra i venditori di TmaxMarket.it! 🏪", html: welcomeHtml });
       const email2Delay = getDelay("VENDOR_EMAIL2_DELAY_MS", 24 * 60 * 60 * 1000);
-      const tipsId = `vendor-tips-${email}`;
-      scheduleEmail(tipsId, email2Delay, async () => {
+      scheduleEmail(`vendor-tips-${email}`, email2Delay, async () => {
         const tipsHtml = vendorListingTipsEmail({ vendorName });
-        await sendEmail({
-          to: email,
-          subject:
-            "Consigli per annunci perfetti su TmaxMarket.it 💡",
-          html: tipsHtml,
-        });
+        await sendEmail({ to: email, subject: "Consigli per annunci perfetti su TmaxMarket.it 💡", html: tipsHtml });
         console.log(`Vendor tips email sent to ${email}`);
       });
-
-      // Email 3: 72h later - orders & payouts
       const email3Delay = getDelay("VENDOR_EMAIL3_DELAY_MS", 72 * 60 * 60 * 1000);
-      const payoutId = `vendor-payout-${email}`;
-      scheduleEmail(payoutId, email3Delay, async () => {
+      scheduleEmail(`vendor-payout-${email}`, email3Delay, async () => {
         const payoutHtml = vendorOrdersPayoutEmail({ vendorName });
-        await sendEmail({
-          to: email,
-          subject:
-            "Gestire ordini e pagamenti su TmaxMarket.it 📊",
-          html: payoutHtml,
-        });
+        await sendEmail({ to: email, subject: "Gestire ordini e pagamenti su TmaxMarket.it 📊", html: payoutHtml });
         console.log(`Vendor orders/payout email sent to ${email}`);
       });
-
       console.log(`Vendor onboarding started for ${email}`, result);
-      res.status(200).json({
-        success: true,
-        emailId: result.data?.id,
-        sequenceScheduled: true,
-      });
+      res.status(200).json({ success: true, emailId: result.data?.id, sequenceScheduled: true });
     } catch (err) {
       console.error("Error sending vendor onboarding email:", err);
-      res
-        .status(500)
-        .json({ error: "Failed to send vendor onboarding email" });
+      res.status(500).json({ error: "Failed to send vendor onboarding email" });
     }
   });
 
-  // ──────────────────────────────────────────
-  // Zone Alerts: subscribe
-  // ──────────────────────────────────────────
   app.post("/alerts/subscribe", async (req, res) => {
     try {
       const { email, zone, tmax_model, max_price } = req.body;
-
-      if (!email || !zone) {
-        return res
-          .status(400)
-          .json({ error: "Email and zone are required" });
-      }
-
+      if (!email || !zone) return res.status(400).json({ error: "Email and zone are required" });
       addZoneSubscriber({ email, zone, tmax_model, max_price });
-      res
-        .status(200)
-        .json({ success: true, message: "Subscribed to zone alerts" });
+      res.status(200).json({ success: true, message: "Subscribed to zone alerts" });
     } catch (err) {
       console.error("Error subscribing to zone alerts:", err);
       res.status(500).json({ error: "Failed to subscribe" });
     }
   });
 
-  // ──────────────────────────────────────────
-  // Zone Alerts: notify matching subscribers
-  // ──────────────────────────────────────────
   app.post("/alerts/notify", async (req, res) => {
     try {
       const { listing } = req.body;
-
-      if (!listing || !listing.zone) {
-        return res
-          .status(400)
-          .json({ error: "Listing with zone is required" });
-      }
-
+      if (!listing || !listing.zone) return res.status(400).json({ error: "Listing with zone is required" });
       const subscribers = findMatchingSubscribers(listing);
-
-      if (subscribers.length === 0) {
-        return res
-          .status(200)
-          .json({ success: true, notified: 0, message: "No matching subscribers" });
-      }
-
+      if (subscribers.length === 0) return res.status(200).json({ success: true, notified: 0, message: "No matching subscribers" });
       const results = [];
       for (const sub of subscribers) {
         try {
-          const html = zoneAlertEmail({
-            listing,
-            subscriberZone: sub.zone,
-          });
-          const result = await sendEmail({
-            to: sub.email,
-            subject: "Nuovo annuncio nella tua zona! 🛵 - TmaxMarket.it",
-            html,
-          });
+          const html = zoneAlertEmail({ listing, subscriberZone: sub.zone });
+          const result = await sendEmail({ to: sub.email, subject: "Nuovo annuncio nella tua zona! 🛵 - TmaxMarket.it", html });
           results.push({ email: sub.email, success: true, emailId: result.data?.id });
         } catch (emailErr) {
           results.push({ email: sub.email, success: false, error: emailErr.message });
         }
       }
-
-      console.log(
-        `Zone alert: notified ${results.filter((r) => r.success).length}/${subscribers.length} subscribers`
-      );
-      res.status(200).json({
-        success: true,
-        notified: results.filter((r) => r.success).length,
-        total: subscribers.length,
-        results,
-      });
+      console.log(`Zone alert: notified ${results.filter((r) => r.success).length}/${subscribers.length} subscribers`);
+      res.status(200).json({ success: true, notified: results.filter((r) => r.success).length, total: subscribers.length, results });
     } catch (err) {
       console.error("Error sending zone alerts:", err);
       res.status(500).json({ error: "Failed to send zone alerts" });
     }
   });
 
-  // ──────────────────────────────────────────
-  // Weekly Report: manual trigger
-  // ──────────────────────────────────────────
   app.post("/reports/trigger-weekly", async (req, res) => {
     try {
-      const {
-        vendors,
-        vendorName,
-        email,
-        totalOrders,
-        totalRevenue,
-        topProducts,
-        periodStart,
-        periodEnd,
-      } = req.body;
-
-      // Support both single vendor and batch
-      const vendorList = vendors || [
-        { email, vendorName, totalOrders, totalRevenue, topProducts },
-      ];
-
-      if (!vendorList.length || !vendorList[0].email) {
-        return res.status(400).json({ error: "At least one vendor with email is required" });
-      }
-
+      const { vendors, vendorName, email, totalOrders, totalRevenue, topProducts, periodStart, periodEnd } = req.body;
+      const vendorList = vendors || [{ email, vendorName, totalOrders, totalRevenue, topProducts }];
+      if (!vendorList.length || !vendorList[0].email) return res.status(400).json({ error: "At least one vendor with email is required" });
       const results = [];
       for (const v of vendorList) {
         try {
@@ -483,32 +283,19 @@ app.use(cors({ origin: "*" }));
             periodStart: periodStart || v.periodStart,
             periodEnd: periodEnd || v.periodEnd,
           });
-          const result = await sendEmail({
-            to: v.email,
-            subject:
-              "Ecco il riepilogo della tua settimana su TmaxMarket.it 📊",
-            html,
-          });
+          const result = await sendEmail({ to: v.email, subject: "Ecco il riepilogo della tua settimana su TmaxMarket.it 📊", html });
           results.push({ email: v.email, success: true, emailId: result.data?.id });
         } catch (emailErr) {
           results.push({ email: v.email, success: false, error: emailErr.message });
         }
       }
-
-      res.status(200).json({
-        success: true,
-        sent: results.filter((r) => r.success).length,
-        results,
-      });
+      res.status(200).json({ success: true, sent: results.filter((r) => r.success).length, results });
     } catch (err) {
       console.error("Error sending weekly report:", err);
       res.status(500).json({ error: "Failed to send weekly report" });
     }
   });
 
-  // ──────────────────────────────────────────────────────
-  // Webhook: orders/paid (garage acquisti tracking)
-  // ──────────────────────────────────────────────────────
   app.post(
     "/webhooks/orders/paid",
     verifyShopifyWebhook,
@@ -516,15 +303,11 @@ app.use(cors({ origin: "*" }));
       try {
         const order = req.body;
         const result = await handleOrderPaid(order);
-
         if (result.skipped) {
           console.log(`Order paid webhook skipped: ${result.reason}`);
           return res.status(200).json({ success: true, skipped: true, reason: result.reason });
         }
-
-        console.log(
-          `Order paid: ${result.action} garage for customer, ${result.items_added} items added (total: ${result.total_items})`
-        );
+        console.log(`Order paid: ${result.action} garage for customer, ${result.items_added} items added (total: ${result.total_items})`);
         res.status(200).json({ success: true, ...result });
       } catch (err) {
         console.error("Error processing order paid webhook:", err);
@@ -533,10 +316,7 @@ app.use(cors({ origin: "*" }));
     }
   );
 
-  // Garage module
   app.use("/garage", garageRouter);
-
-  // Raduni & Eventi module
   app.use("/raduni", raduniRouter);
 
   return app;
