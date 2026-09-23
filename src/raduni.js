@@ -153,11 +153,8 @@ async function getCustomerWithTags(customerId) {
 
 const BLOG_ID = "gid://shopify/Blog/102029099148";
 
-function buildArticleBody({ gruppo, dataEvento, luogo, link, descrizione, itinerario, ristorante, infoUtili, imageUrl }) {
+function buildArticleBody({ gruppo, dataEvento, luogo, link, descrizione, itinerario, ristorante, infoUtili }) {
   const parts = [];
-  if (imageUrl) {
-    parts.push(`<div style="text-align:center;margin-bottom:20px;"><img src="${imageUrl}" alt="Locandina evento" style="max-width:100%;height:auto;border-radius:8px;" /></div>`);
-  }
   parts.push(`<p><strong>Gruppo:</strong> ${gruppo}</p>`);
   parts.push(`<p><strong>Data evento:</strong> ${dataEvento}</p>`);
   parts.push(`<p><strong>Luogo:</strong> ${luogo}</p>`);
@@ -170,7 +167,7 @@ function buildArticleBody({ gruppo, dataEvento, luogo, link, descrizione, itiner
 }
 
 async function createRadunoArticle({ titolo, gruppo, dataEvento, luogo, link, descrizione, itinerario, ristorante, infoUtili, authorName, imageUrl }) {
-  const bodyHtml = buildArticleBody({ gruppo, dataEvento, luogo, link, descrizione, itinerario, ristorante, infoUtili, imageUrl });
+  const bodyHtml = buildArticleBody({ gruppo, dataEvento, luogo, link, descrizione, itinerario, ristorante, infoUtili });
 
   const query = `
     mutation articleCreate($article: ArticleCreateInput!) {
