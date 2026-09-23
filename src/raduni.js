@@ -189,10 +189,6 @@ async function createRadunoArticle({ titolo, gruppo, dataEvento, luogo, link, de
     metafields: [{ namespace: "custom", key: "data_evento", value: dataEvento, type: "date" }],
   };
 
-  if (imageUrl) {
-    articleInput.image = { src: imageUrl, altText: `Locandina: ${titolo}` };
-  }
-
   const data = await shopifyGraphQL(query, { article: articleInput });
   const result = data.articleCreate;
   if (result.userErrors && result.userErrors.length > 0) {
